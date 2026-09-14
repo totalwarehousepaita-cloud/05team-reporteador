@@ -1,0 +1,6 @@
+services:
+  - type: web
+    name: 05team-reporteador
+    runtime: static
+    buildCommand: echo "Static site ready"
+    staticPublishPath: .
