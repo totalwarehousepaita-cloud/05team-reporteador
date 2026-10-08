@@ -40,7 +40,16 @@ const MANUAL_ID='manual-reparaciones';
 let PROGRAM_ID=new URLSearchParams(location.search).get('section')==='manual'?MANUAL_ID:IICL_ID;
 const MANUAL_TITLES=['Introducción y finalidades','Procedimientos generales de reparación','Esquineros (Corner Fittings)','Postes esquineros (Corner Posts)','Rieles','Paneles laterales y frontales','Ensamblaje de techo','Subestructura (o submarco)','Piso','Ensamblaje de puertas','Ventiladores','Glosario de términos de reparación'];
 function isManual(){return PROGRAM_ID===MANUAL_ID}
-function goSection(id){const u=new URL(location.href);u.search='';u.searchParams.set('section',id===MANUAL_ID?'manual':'iicl');location.assign(u.toString())}
+async function goSection(id){
+  if(id!==IICL_ID && id!==MANUAL_ID)return;
+  PROGRAM_ID=id;
+  const u=new URL(location.href);
+  u.search='';u.searchParams.set('section',id===MANUAL_ID?'manual':'iicl');
+  history.pushState({section:id},'',u.toString());
+  state.screen='detail';state.clientMode=false;state.clientToken=null;
+  document.getElementById('app').innerHTML=topbar('PANEL')+'<div class="empty">Cargando reportes...</div>';
+  await boot();
+}
 
 const db=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 let PROGRAM={id:PROGRAM_ID,name:'Preparación para Certificación IICL — Inspector Dry Van',client:'05TEAM · Seguimiento de actividades de Elvis Sernauque Gómez',scope:[]};
