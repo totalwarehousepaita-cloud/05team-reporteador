@@ -25,7 +25,7 @@ main{padding:18px 16px 74px} .eyebrow{font-family:'IBM Plex Mono';font-size:11px
 @media(max-width:520px){.source-actions{grid-template-columns:1fr 1fr} .brand span{display:none}}
 
 .module-progress{background:#fff;border:1px solid var(--line);padding:15px;margin-bottom:14px}.module-progress-top{display:flex;justify-content:space-between;align-items:end;gap:12px;margin-bottom:10px}.module-progress h3{margin:0;font-size:14px}.module-progress .summary{font-family:'IBM Plex Mono';font-size:10.5px;color:var(--muted)}.module-list{display:grid;gap:8px;margin-top:12px}.module-item{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:9px 10px;background:var(--paper2);border:1px solid var(--line);font-size:11.5px}.module-item.done{border-color:var(--green);background:rgba(42,196,64,.08)}.module-name{display:flex;align-items:center;gap:8px}.module-dot{width:9px;height:9px;border-radius:50%;background:#cfd6cf;flex:0 0 auto}.module-item.done .module-dot{background:var(--green)}.module-state{font-family:'IBM Plex Mono';font-size:9.5px;font-weight:700;color:var(--muted)}.module-item.done .module-state{color:var(--green2)}.module-tag{display:inline-flex;align-items:center;gap:5px;font-family:'IBM Plex Mono';font-size:9px;background:var(--paper2);border:1px solid var(--line);padding:4px 6px;margin-bottom:7px}.module-tag.done{border-color:var(--green);color:var(--green2);background:rgba(42,196,64,.08)}.check-row{display:flex;align-items:center;gap:8px;font-size:11.5px;margin-top:7px}.check-row input{width:16px;height:16px;accent-color:var(--green)}
-.section-switch{display:grid;grid-template-columns:1fr 1fr;gap:9px;margin:0 0 18px}.section-btn{background:#fff;border:1px solid var(--line);padding:14px 9px;font-family:'Archivo',sans-serif;font-size:12px;font-weight:800;color:var(--deep);cursor:pointer;text-align:center}.section-btn.selected{background:#e7f6e9;border:2px solid var(--green);color:var(--ink)}@media(max-width:420px){.section-btn{font-size:11px;padding:12px 5px}}
+.section-switch{display:grid;grid-template-columns:1fr;gap:12px;margin:0 0 18px}.section-project{display:block;width:100%;text-align:left;border:1px solid var(--line);background:#fff;padding:18px;cursor:pointer;color:inherit}.section-project:hover{border-color:var(--green2)}.section-project h3{font-family:Archivo,sans-serif;font-size:17px;margin:0 0 6px}.section-project p{font-size:12px;color:var(--muted);margin:0 0 14px}.section-project .meta{margin-top:10px}.section-project .card-action{font-size:11px;color:var(--deep);font-weight:700;margin-top:13px}.section-btn{background:#fff;border:1px solid var(--line);padding:14px 9px;font-family:'Archivo',sans-serif;font-size:12px;font-weight:800;color:var(--deep);cursor:pointer;text-align:center}.section-btn.selected{background:#e7f6e9;border:2px solid var(--green);color:var(--ink)}@media(max-width:420px){.section-btn{font-size:11px;padding:12px 5px}}
 </style>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
 </head>
@@ -45,6 +45,7 @@ function goSection(id){const u=new URL(location.href);u.search='';u.searchParams
 const db=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 let PROGRAM={id:PROGRAM_ID,name:'Preparación para Certificación IICL — Inspector Dry Van',client:'05TEAM · Seguimiento de actividades de Elvis Sernauque Gómez',scope:[]};
 let MODULES=[];
+let OTHER_SUMMARY={iicl:null,manual:null};
 let state={screen:'home',reports:[],participants:[],clientMode:false,clientToken:null};
 let editors=[];
 
@@ -63,7 +64,7 @@ async function boot(){
     if(token && token!==p.client_token){document.getElementById('app').innerHTML='<div class="empty" style="padding-top:80px">Enlace de cliente no válido.</div>';return}
     PROGRAM.name=p.name; PROGRAM.client=`05TEAM · Seguimiento de actividades de ${p.trainer}`; state.clientToken=p.client_token;
     if(token){state.clientMode=true;state.screen='client'}
-    await reloadData(); render();
+    await reloadData(); await loadHomeSummaries(); render();
   }catch(e){console.error(e);document.getElementById('app').innerHTML='<div class="empty" style="padding-top:80px">⚠ No se pudo conectar con Supabase. Revisa la configuración y vuelve a cargar la página.</div>'}
 }
 
@@ -81,8 +82,30 @@ async function reloadData(){
   state.reports=(reps||[]).map(r=>({...r,date:r.report_date,activities:acts.filter(a=>a.report_id===r.id).map(a=>{const m=MODULES.find(x=>x.id===a.module_id);return {id:a.id,text:a.description||'',photos:Array.isArray(a.photos)?a.photos:[],moduleId:a.module_id||'',module:m?.name||'',moduleCompleted:!!a.module_completed,activityDate:a.activity_date||'',attendance:Object.fromEntries(attendance.filter(x=>x.activity_id===a.id).map(x=>[x.participant_id,!!x.attended]))}})}));
 }
 
+async function loadHomeSummaries(){
+  const ids=[IICL_ID,MANUAL_ID];
+  const results=await Promise.all(ids.map(async id=>{
+    try{
+      const [{data:program,error:pe},{data:mods,error:me},{data:reps,error:re}]=await Promise.all([
+        db.from('programs').select('id,name,trainer').eq('id',id).maybeSingle(),
+        db.from('modules').select('completed').eq('program_id',id),
+        db.from('reports').select('day').eq('program_id',id).order('day',{ascending:false}).limit(1)
+      ]);
+      if(pe||me||re||!program)return [id,null];
+      const total=(mods||[]).length,done=(mods||[]).filter(m=>m.completed).length;
+      return [id,{name:program.name,trainer:program.trainer,total,done,pc:total?Math.round(done/total*100):0,day:reps?.[0]?.day||0}];
+    }catch(e){console.warn('No se pudo cargar resumen',id,e);return [id,null]}
+  }));
+  OTHER_SUMMARY=Object.fromEntries(results);
+}
+function sectionCard(id,title,subtitle){
+ const info=OTHER_SUMMARY[id],pc=info?.pc??0;
+ const count=info?`${info.done} de ${info.total} ${id===MANUAL_ID?'temas':'módulos'} completados`:'Datos pendientes de configuración';
+ return `<button type="button" class="section-project" data-section="${id}"><h3>${title}</h3><p>${subtitle}</p><div class="progress-row"><div class="track"><div class="fill" style="width:${pc}%"></div></div><div class="pct">${pc}%</div></div><div class="meta"><span>Día ${info?.day??0}</span><span>${count}</span></div><div class="card-action">Abrir apartado →</div></button>`;
+}
 function render(){document.getElementById('app').innerHTML=topbar(state.screen==='client'?'CLIENTE':'PANEL')+(state.screen==='home'?home():state.screen==='detail'?detail(false):detail(true));bind()}
-function home(){let done=MODULES.filter(m=>m.completed).length,pc=progressPct();return `<main><div class="eyebrow">Apartados del reporteador</div><div class="section-switch"><button type="button" class="section-btn ${!isManual()?'selected':''}" id="goIicl">📋 Certificación IICL</button><button type="button" class="section-btn ${isManual()?'selected':''}" id="goManual">📗 Manual de Reparaciones</button></div><div class="eyebrow">${isManual()?'Manual de Reparaciones · 12 temas':'Programa activo'}</div><div class="proj-card" id="openProgram"><div class="proj-top"><div><h3>${esc(PROGRAM.name)}</h3><p>${esc(PROGRAM.client)}</p></div><span class="status">ACTIVO</span></div><div class="progress-row"><div class="track"><div class="fill" style="width:${pc}%"></div></div><div class="pct">${pc}%</div></div><div class="meta"><span>Día ${maxDay()||0}</span><span>${done} de ${MODULES.length} ${isManual()?'temas':'módulos'} completados</span></div></div></main>`}
+function home(){return `<main><div class="eyebrow">Apartados del reporteador</div><div class="section-switch">${sectionCard(IICL_ID,'📋 Certificación IICL','Preparación para certificación · 6 módulos')}${sectionCard(MANUAL_ID,'📗 Manual de Reparaciones','Reparación de contenedores de acero · 12 temas principales')}</div></main>`}
+
 function detail(client){let reps=[...state.reports].sort((a,b)=>a.day-b.day),doneSet=completedModules(),done=doneSet.size,pc=progressPct();return `<main><div class="back" id="back">← Volver</div><div class="top-actions">${client?'':`<button class="link-btn" id="clientView">👁 Vista cliente</button><button class="link-btn" id="copyClient">🔗 Copiar enlace cliente</button>`}<button class="link-btn" id="pdfAll">⬇ PDF acumulado</button></div><div class="detail-head"><h2>${esc(PROGRAM.name)}</h2><p class="sub">${esc(PROGRAM.client)}</p><div class="daycounter"><span class="big">Día ${maxDay()||0}</span><span class="of">Último día registrado</span></div></div>${participantsHTML(client)}<div class="module-progress"><div class="module-progress-top"><div><h3>${isManual()?'Avance del manual':'Avance del programa'}</h3><div class="summary">${done} de ${MODULES.length} ${isManual()?'temas':'módulos'} completados</div></div><div class="pct">${pc}%</div></div><div class="progress-row"><div class="track"><div class="fill" style="width:${pc}%"></div></div></div><div class="module-list">${MODULES.map((m,i)=>`<div class="module-item ${m.completed?'done':''}"><div class="module-name"><span class="module-dot"></span><span>${i+1}. ${esc(m.name)}</span></div><span class="module-state">${m.completed?'COMPLETADO':'PENDIENTE'}</span></div>`).join('')}</div></div><div class="eyebrow">Reportes por día</div>${reps.length?reps.map(r=>reportHTML(r,client)).join(''):'<div class="empty">Todavía no hay reportes.</div>'}</main>${client?'':`<button class="fab" id="newReport">＋ Crear reporte</button>`}`}
 function participantsHTML(client){return `<div class="participants-box"><div class="participants-head"><div><h3>Integrantes</h3><div class="summary">${state.participants.length} participante${state.participants.length===1?'':'s'} registrado${state.participants.length===1?'':'s'}</div></div>${client?'':`<button class="mini" id="addParticipant">＋ Agregar integrante</button>`}</div>${state.participants.length?state.participants.map(p=>`<div class="participant-row"><div class="participant-info"><b>${esc(p.full_name)}</b><span>DNI: ${esc(p.dni)}</span></div>${client?'':`<div class="participant-actions"><button class="mini editParticipant" data-id="${p.id}">Editar</button><button class="mini danger deleteParticipant" data-id="${p.id}">Eliminar</button></div>`}</div>`).join(''):`<div class="empty-small">Todavía no hay integrantes registrados.</div>`}</div>`}
 function openParticipant(id=null){const p=state.participants.find(x=>x.id===id);document.body.insertAdjacentHTML('beforeend',`<div class="overlay" id="participantOverlay"><div class="modal"><div class="modal-head"><h2>${p?'Editar':'Agregar'} integrante</h2><button class="close" id="closeParticipant">×</button></div><p class="modal-sub">Registra los datos del participante de la capacitación.</p><div class="field"><label class="fl">Nombre completo</label><input type="text" id="participantName" value="${esc(p?.full_name||'')}" placeholder="Nombre y apellidos"></div><div class="field"><label class="fl">DNI</label><input type="text" id="participantDni" inputmode="numeric" maxlength="12" value="${esc(p?.dni||'')}" placeholder="DNI"></div></div><div class="modal-footer"><button class="primary" id="saveParticipant">Guardar integrante</button></div></div>`);document.getElementById('closeParticipant').onclick=()=>document.getElementById('participantOverlay').remove();document.getElementById('saveParticipant').onclick=()=>saveParticipant(id)}
@@ -92,8 +115,7 @@ function reportHTML(r,client){let photos=(r.activities||[]).reduce((n,a)=>n+(a.p
 function formatDate(v){if(!v)return '';const [y,m,d]=v.split('-');return `${d}/${m}/${y}`}
 
 function bind(){
- document.getElementById('goIicl')?.addEventListener('click',()=>goSection(IICL_ID));
- document.getElementById('goManual')?.addEventListener('click',()=>goSection(MANUAL_ID));
+ document.querySelectorAll('[data-section]').forEach(el=>el.addEventListener('click',()=>goSection(el.dataset.section)));
  document.getElementById('openProgram')?.addEventListener('click',()=>{state.screen='detail';render()});
  document.getElementById('back')?.addEventListener('click',()=>{if(state.clientMode){return}state.screen=state.screen==='client'?'detail':'home';render()});
  document.getElementById('clientView')?.addEventListener('click',()=>{state.screen='client';render()});
