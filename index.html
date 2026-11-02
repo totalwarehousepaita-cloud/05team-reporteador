@@ -41,6 +41,32 @@ const VIRTUAL_ID='iicl-virtual';
 const EXAMS_ID='iicl-examenes-presencial';
 let EXAM_SCORES=[];
 let EXAM_PARTICIPANT_NAME='';
+/* GENERAL_CLIENT_VIEW_PATCH */
+const GENERAL_PARAM='general';
+function generalTokens(){
+  try {const raw=new URLSearchParams(location.search).get(GENERAL_PARAM);return raw?JSON.parse(decodeURIComponent(escape(atob(raw)))):null}
+  catch(e){return null}
+}
+function generalClient(){return !!generalTokens()}
+function clientGeneralUrl(tokens){
+  const u=new URL(location.href);u.search='';u.hash='';
+  u.searchParams.set(GENERAL_PARAM,btoa(unescape(encodeURIComponent(JSON.stringify(tokens)))));
+  return u.toString()
+}
+function generalHome(){state.screen='home';state.clientMode=true;render()}
+async function copyGeneralClientLink(){
+  try {
+    const ids=[IICL_ID,MANUAL_ID,EXAMS_ID,VIRTUAL_ID];
+    const {data,error}=await db.from('programs').select('id,client_token').in('id',ids);
+    if(error)throw error;
+    const tokens=Object.fromEntries((data||[]).map(x=>[x.id,x.client_token]));
+    if(ids.some(id=>!tokens[id]))throw Error('Falta configurar un módulo o su enlace de cliente.');
+    const url=clientGeneralUrl(tokens);
+    try{await navigator.clipboard.writeText(url);alert('Enlace general del cliente copiado.')}
+    catch(e){prompt('Copia el enlace general del cliente:',url)}
+  }catch(e){console.error(e);alert('No se pudo generar el enlace general: '+e.message)}
+}
+
 let PROGRAM_ID=({'manual':MANUAL_ID,'virtual':VIRTUAL_ID,'examenes':EXAMS_ID}[new URLSearchParams(location.search).get('section')]||IICL_ID);
 const MANUAL_TITLES=['Introducción y finalidades','Procedimientos generales de reparación','Esquineros (Corner Fittings)','Postes esquineros (Corner Posts)','Rieles','Paneles laterales y frontales','Ensamblaje de techo','Subestructura (o submarco)','Piso','Ensamblaje de puertas','Ventiladores','Glosario de términos de reparación'];
 function isManual(){return PROGRAM_ID===MANUAL_ID}
@@ -49,9 +75,10 @@ async function goSection(id){
   if(![IICL_ID,MANUAL_ID,VIRTUAL_ID,EXAMS_ID].includes(id))return;
   PROGRAM_ID=id;
   const u=new URL(location.href);
-  u.search='';u.searchParams.set('section',sectionSlug(id));
+  if(!generalClient())u.search='';
+  u.searchParams.set('section',sectionSlug(id));
   history.pushState({section:id},'',u.toString());
-  state.screen=id===EXAMS_ID?'exams':'detail';state.clientMode=false;state.clientToken=null;
+  state.screen=id===EXAMS_ID?'exams':generalClient()?'client':'detail';state.clientMode=generalClient();state.clientToken=null;
   document.getElementById('app').innerHTML=topbar('PANEL')+'<div class="empty">Cargando reportes...</div>';
   await boot();
 }
@@ -72,12 +99,16 @@ function topbar(role){return `<div class="topbar"><div class="brand"><img src="$
 async function boot(){
   try{
     const params=new URLSearchParams(location.search);
-    const token=params.get('client');
+    const general=generalTokens();
+    const token=general?general[PROGRAM_ID]:params.get('client');
+    if(general && (!token || ![IICL_ID,MANUAL_ID,EXAMS_ID,VIRTUAL_ID].includes(PROGRAM_ID))){
+      document.getElementById('app').innerHTML='<div class="empty">Enlace general de cliente no válido.</div>';return;
+    }
     let q=db.from('programs').select('id,name,trainer,client_token').eq('id',PROGRAM_ID).single();
     const {data:p,error:pe}=await q;if(pe)throw pe;
     if(token && token!==p.client_token){document.getElementById('app').innerHTML='<div class="empty" style="padding-top:80px">Enlace de cliente no válido.</div>';return}
     PROGRAM.name=p.name; PROGRAM.client=`05TEAM · Seguimiento de actividades de ${p.trainer}`; state.clientToken=p.client_token;
-    if(token){state.clientMode=true;state.screen='client'}
+    if(token){state.clientMode=true;state.screen=general?(PROGRAM_ID===EXAMS_ID?'exams':params.has('section')?'client':'home'):'client'}
     if(PROGRAM_ID===EXAMS_ID){await loadExamScores()}else{await reloadData()} await loadHomeSummaries(); render();
   }catch(e){console.error(e);document.getElementById('app').innerHTML='<div class="empty" style="padding-top:80px">⚠ No se pudo conectar con Supabase. Revisa la configuración y vuelve a cargar la página.</div>'}
 }
@@ -146,8 +177,8 @@ async function saveExamScore(n){
  await loadExamScores();await loadHomeSummaries();render();alert('Nota del examen '+n+' guardada.');
 }
 
-function render(){document.getElementById('app').innerHTML=topbar(state.screen==='client'?'CLIENTE':'PANEL')+(state.screen==='home'?home():state.screen==='exams'?examPage():state.screen==='detail'?detail(false):detail(true));bind()}
-function home(){return `<main><div class="eyebrow">Apartados del reporteador</div><div class="section-switch">${sectionCard(IICL_ID,'📋 Certificación IICL','Preparación para certificación · 6 módulos')}${sectionCard(MANUAL_ID,'📗 Manual de Reparaciones','Reparación de contenedores de acero · 12 temas principales')}${sectionCard(EXAMS_ID,'📝 Exámenes de Certificación IICL Presencial','6 exámenes · 1 participante · notas de 0 a 100')}${sectionCard(VIRTUAL_ID,'💻 Certificación IICL Virtual','Los mismos 6 módulos de IICL · reportes independientes')}</div></main>`}
+function render(){document.getElementById('app').innerHTML=topbar(state.clientMode?'CLIENTE':'PANEL')+(state.screen==='home'?home():state.screen==='exams'?examPage():state.screen==='detail'?detail(false):detail(true));bind();if(state.clientMode&&state.screen==='exams'){document.querySelectorAll('#saveExamParticipant,[data-exam-save]').forEach(el=>el.remove());document.querySelectorAll('#examParticipantName,[id^="exam-"]').forEach(el=>{el.readOnly=true;el.disabled=true})}}
+function home(){return `<main>${!state.clientMode?'<div class="top-actions"><button class="link-btn" id="copyGeneralClient">🔗 Copiar enlace general del cliente</button></div>':''}<div class="eyebrow">${state.clientMode?'Panel general del cliente':'Apartados del reporteador'}</div><div class="section-switch">${sectionCard(IICL_ID,'📋 Certificación IICL','Preparación para certificación · 6 módulos')}${sectionCard(MANUAL_ID,'📗 Manual de Reparaciones','Reparación de contenedores de acero · 12 temas principales')}${sectionCard(EXAMS_ID,'📝 Exámenes de Certificación IICL Presencial','6 exámenes · 1 participante · notas de 0 a 100')}${sectionCard(VIRTUAL_ID,'💻 Certificación IICL Virtual','Los mismos 6 módulos de IICL · reportes independientes')}</div></main>`}
 
 function detail(client){let reps=[...state.reports].sort((a,b)=>a.day-b.day),doneSet=completedModules(),done=doneSet.size,pc=progressPct();return `<main><div class="back" id="back">← Volver</div><div class="top-actions">${client?'':`<button class="link-btn" id="clientView">👁 Vista cliente</button><button class="link-btn" id="copyClient">🔗 Copiar enlace cliente</button>`}<button class="link-btn" id="pdfAll">⬇ PDF acumulado</button></div><div class="detail-head"><h2>${esc(PROGRAM.name)}</h2><p class="sub">${esc(PROGRAM.client)}</p><div class="daycounter"><span class="big">Día ${maxDay()||0}</span><span class="of">Último día registrado</span></div></div>${participantsHTML(client)}<div class="module-progress"><div class="module-progress-top"><div><h3>${isManual()?'Avance del manual':'Avance del programa'}</h3><div class="summary">${done} de ${MODULES.length} ${isManual()?'temas':'módulos'} completados</div></div><div class="pct">${pc}%</div></div><div class="progress-row"><div class="track"><div class="fill" style="width:${pc}%"></div></div></div><div class="module-list">${MODULES.map((m,i)=>`<div class="module-item ${m.completed?'done':''}"><div class="module-name"><span class="module-dot"></span><span>${i+1}. ${esc(m.name)}</span></div><span class="module-state">${m.completed?'COMPLETADO':'PENDIENTE'}</span></div>`).join('')}</div></div><div class="eyebrow">Reportes por día</div>${reps.length?reps.map(r=>reportHTML(r,client)).join(''):'<div class="empty">Todavía no hay reportes.</div>'}</main>${client?'':`<button class="fab" id="newReport">＋ Crear reporte</button>`}`}
 function participantsHTML(client){return `<div class="participants-box"><div class="participants-head"><div><h3>Integrantes</h3><div class="summary">${state.participants.length} participante${state.participants.length===1?'':'s'} registrado${state.participants.length===1?'':'s'}</div></div>${client?'':`<button class="mini" id="addParticipant">＋ Agregar integrante</button>`}</div>${state.participants.length?state.participants.map(p=>`<div class="participant-row"><div class="participant-info"><b>${esc(p.full_name)}</b><span>DNI: ${esc(p.dni)}</span></div>${client?'':`<div class="participant-actions"><button class="mini editParticipant" data-id="${p.id}">Editar</button><button class="mini danger deleteParticipant" data-id="${p.id}">Eliminar</button></div>`}</div>`).join(''):`<div class="empty-small">Todavía no hay integrantes registrados.</div>`}</div>`}
@@ -159,13 +190,14 @@ function formatDate(v){if(!v)return '';const [y,m,d]=v.split('-');return `${d}/$
 
 function bind(){
  document.getElementById('saveExamParticipant')?.addEventListener('click',saveExamParticipant);
- document.getElementById('examBack')?.addEventListener('click',()=>{state.screen='home';render()});
+ document.getElementById('examBack')?.addEventListener('click',()=>{if(generalClient())generalHome();else{state.screen='home';render()}});
  document.querySelectorAll('[data-exam-save]').forEach(el=>el.addEventListener('click',()=>saveExamScore(Number(el.dataset.examSave))));
  document.querySelectorAll('[data-section]').forEach(el=>el.addEventListener('click',()=>goSection(el.dataset.section)));
  document.getElementById('openProgram')?.addEventListener('click',()=>{state.screen='detail';render()});
- document.getElementById('back')?.addEventListener('click',()=>{if(state.clientMode){return}state.screen=state.screen==='client'?'detail':'home';render()});
+ document.getElementById('back')?.addEventListener('click',()=>{if(generalClient()){generalHome();return}if(state.clientMode){return}state.screen=state.screen==='client'?'detail':'home';render()});
  document.getElementById('clientView')?.addEventListener('click',()=>{state.screen='client';render()});
  document.getElementById('copyClient')?.addEventListener('click',copyClientLink);
+ document.getElementById('copyGeneralClient')?.addEventListener('click',copyGeneralClientLink);
  document.getElementById('addParticipant')?.addEventListener('click',()=>openParticipant());
  document.querySelectorAll('.editParticipant').forEach(x=>x.onclick=()=>openParticipant(x.dataset.id));
  document.querySelectorAll('.deleteParticipant').forEach(x=>x.onclick=()=>deleteParticipant(x.dataset.id));
@@ -213,5 +245,6 @@ function closeModal(){document.getElementById('overlay')?.remove()}
 function lightbox(src){document.body.insertAdjacentHTML('beforeend',`<div class="lightbox" id="lb"><button class="lbclose">×</button><img src="${esc(src)}"></div>`);document.querySelector('.lbclose').onclick=()=>document.getElementById('lb').remove();document.getElementById('lb').onclick=e=>{if(e.target.id==='lb')e.currentTarget.remove()}}
 async function waitImages(el){const imgs=[...el.querySelectorAll('img')];await Promise.all(imgs.map(img=>img.complete?Promise.resolve():new Promise(r=>{img.onload=img.onerror=r})))}
 async function pdfExport(day=null){let reps=day?state.reports.filter(r=>r.day===day):[...state.reports].sort((a,b)=>a.day-b.day),done=MODULES.filter(m=>m.completed).length,pc=progressPct();let el=document.createElement('div');el.className='pdf';el.innerHTML=`<div class="pdf-header"><img src="${LOGO}" class="pdf-logo"><h1>${esc(PROGRAM.name)}</h1><p>${esc(PROGRAM.client)}</p><p><b>Último día registrado:</b> Día ${maxDay()}</p><p><b>Avance del programa:</b> ${pc}% · ${done} de ${MODULES.length} ${isManual()?'temas':'módulos'} completados</p></div>${reps.map(r=>`<section><h2>Día ${r.day}</h2>${r.activities.map((a,i)=>`<div class="pdf-act"><h3>Actividad ${i+1}</h3>${a.activityDate?`<p><b>Fecha:</b> ${formatDate(a.activityDate)}</p>`:''}${a.module?`<p><b>Módulo:</b> ${esc(a.module)}${a.moduleCompleted?' · COMPLETADO':''}</p>`:''}<p>${esc(a.text)}</p>${state.participants.length?`<p><b>Asistencia:</b> ${state.participants.filter(p=>a.attendance?.[p.id]).map(p=>esc(p.full_name)).join(', ')||'Sin asistentes marcados'}</p>`:''}${a.photos.length?`<div class="pdf-photos">${a.photos.map(p=>`<img crossorigin="anonymous" src="${esc(p)}">`).join('')}</div>`:''}</div>`).join('')}</section>`).join('')}`;let host=document.createElement('div');host.style='position:fixed;left:-10000px;top:0;width:794px';host.appendChild(el);document.body.appendChild(host);try{if(document.fonts?.ready)await document.fonts.ready;await waitImages(el);await new Promise(r=>requestAnimationFrame(()=>requestAnimationFrame(r)));await html2pdf().set({margin:8,filename:day?`05TEAM-dia-${day}.pdf`:'05TEAM-reporte-acumulado.pdf',image:{type:'jpeg',quality:.95},html2canvas:{scale:2,useCORS:true,allowTaint:false,backgroundColor:'#ffffff',scrollX:0,scrollY:0},jsPDF:{unit:'mm',format:'a4',orientation:'portrait'}}).from(el).save()}finally{host.remove()}}
+window.addEventListener('popstate',()=>location.reload());
 boot();
 </script></body></html>
