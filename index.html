@@ -37,16 +37,20 @@ const SUPABASE_KEY='sb_publishable_-EJkmFugU8XeMNpJ0Ei4Ag_a43jCzSD';
 // MANUAL_REPARACIONES_2026: dos programas independientes, misma funcionalidad.
 const IICL_ID='iicl';
 const MANUAL_ID='manual-reparaciones';
-let PROGRAM_ID=new URLSearchParams(location.search).get('section')==='manual'?MANUAL_ID:IICL_ID;
+const VIRTUAL_ID='iicl-virtual';
+const EXAMS_ID='iicl-examenes-presencial';
+let EXAM_SCORES=[];
+let PROGRAM_ID=({'manual':MANUAL_ID,'virtual':VIRTUAL_ID,'examenes':EXAMS_ID}[new URLSearchParams(location.search).get('section')]||IICL_ID);
 const MANUAL_TITLES=['Introducción y finalidades','Procedimientos generales de reparación','Esquineros (Corner Fittings)','Postes esquineros (Corner Posts)','Rieles','Paneles laterales y frontales','Ensamblaje de techo','Subestructura (o submarco)','Piso','Ensamblaje de puertas','Ventiladores','Glosario de términos de reparación'];
 function isManual(){return PROGRAM_ID===MANUAL_ID}
+function sectionSlug(id){return ({[IICL_ID]:'iicl',[MANUAL_ID]:'manual',[VIRTUAL_ID]:'virtual',[EXAMS_ID]:'examenes'})[id]||'iicl'}
 async function goSection(id){
-  if(id!==IICL_ID && id!==MANUAL_ID)return;
+  if(![IICL_ID,MANUAL_ID,VIRTUAL_ID,EXAMS_ID].includes(id))return;
   PROGRAM_ID=id;
   const u=new URL(location.href);
-  u.search='';u.searchParams.set('section',id===MANUAL_ID?'manual':'iicl');
+  u.search='';u.searchParams.set('section',sectionSlug(id));
   history.pushState({section:id},'',u.toString());
-  state.screen='detail';state.clientMode=false;state.clientToken=null;
+  state.screen=id===EXAMS_ID?'exams':'detail';state.clientMode=false;state.clientToken=null;
   document.getElementById('app').innerHTML=topbar('PANEL')+'<div class="empty">Cargando reportes...</div>';
   await boot();
 }
@@ -54,7 +58,7 @@ async function goSection(id){
 const db=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 let PROGRAM={id:PROGRAM_ID,name:'Preparación para Certificación IICL — Inspector Dry Van',client:'05TEAM · Seguimiento de actividades de Elvis Sernauque Gómez',scope:[]};
 let MODULES=[];
-let OTHER_SUMMARY={iicl:null,manual:null};
+let OTHER_SUMMARY={iicl:null,manual:null,[VIRTUAL_ID]:null,[EXAMS_ID]:null};
 let state={screen:'home',reports:[],participants:[],clientMode:false,clientToken:null};
 let editors=[];
 
@@ -73,7 +77,7 @@ async function boot(){
     if(token && token!==p.client_token){document.getElementById('app').innerHTML='<div class="empty" style="padding-top:80px">Enlace de cliente no válido.</div>';return}
     PROGRAM.name=p.name; PROGRAM.client=`05TEAM · Seguimiento de actividades de ${p.trainer}`; state.clientToken=p.client_token;
     if(token){state.clientMode=true;state.screen='client'}
-    await reloadData(); await loadHomeSummaries(); render();
+    if(PROGRAM_ID===EXAMS_ID){await loadExamScores()}else{await reloadData()} await loadHomeSummaries(); render();
   }catch(e){console.error(e);document.getElementById('app').innerHTML='<div class="empty" style="padding-top:80px">⚠ No se pudo conectar con Supabase. Revisa la configuración y vuelve a cargar la página.</div>'}
 }
 
@@ -92,7 +96,7 @@ async function reloadData(){
 }
 
 async function loadHomeSummaries(){
-  const ids=[IICL_ID,MANUAL_ID];
+  const ids=[IICL_ID,MANUAL_ID,VIRTUAL_ID];
   const results=await Promise.all(ids.map(async id=>{
     try{
       const [{data:program,error:pe},{data:mods,error:me},{data:reps,error:re}]=await Promise.all([
@@ -106,14 +110,33 @@ async function loadHomeSummaries(){
     }catch(e){console.warn('No se pudo cargar resumen',id,e);return [id,null]}
   }));
   OTHER_SUMMARY=Object.fromEntries(results);
+  try{await loadExamScores();OTHER_SUMMARY[EXAMS_ID]={done:EXAM_SCORES.filter(x=>x.score!==null).length,total:6,pc:Math.round(EXAM_SCORES.filter(x=>x.score!==null).length/6*100),day:0}}catch(e){console.warn('Notas no disponibles',e);OTHER_SUMMARY[EXAMS_ID]=null}
 }
 function sectionCard(id,title,subtitle){
  const info=OTHER_SUMMARY[id],pc=info?.pc??0;
- const count=info?`${info.done} de ${info.total} ${id===MANUAL_ID?'temas':'módulos'} completados`:'Datos pendientes de configuración';
- return `<button type="button" class="section-project" data-section="${id}"><h3>${title}</h3><p>${subtitle}</p><div class="progress-row"><div class="track"><div class="fill" style="width:${pc}%"></div></div><div class="pct">${pc}%</div></div><div class="meta"><span>Día ${info?.day??0}</span><span>${count}</span></div><div class="card-action">Abrir apartado →</div></button>`;
+ const count=info?`${info.done} de ${info.total} ${id===EXAMS_ID?'exámenes registrados':id===MANUAL_ID?'temas completados':'módulos completados'}`:'Datos pendientes de configuración';
+ return `<button type="button" class="section-project" data-section="${id}"><h3>${title}</h3><p>${subtitle}</p><div class="progress-row"><div class="track"><div class="fill" style="width:${pc}%"></div></div><div class="pct">${pc}%</div></div><div class="meta"><span>${id===EXAMS_ID?'Registro de notas':'Día '+(info?.day??0)}</span><span>${count}</span></div><div class="card-action">Abrir apartado →</div></button>`;
 }
-function render(){document.getElementById('app').innerHTML=topbar(state.screen==='client'?'CLIENTE':'PANEL')+(state.screen==='home'?home():state.screen==='detail'?detail(false):detail(true));bind()}
-function home(){return `<main><div class="eyebrow">Apartados del reporteador</div><div class="section-switch">${sectionCard(IICL_ID,'📋 Certificación IICL','Preparación para certificación · 6 módulos')}${sectionCard(MANUAL_ID,'📗 Manual de Reparaciones','Reparación de contenedores de acero · 12 temas principales')}</div></main>`}
+
+async function loadExamScores(){
+ const {data,error}=await db.from('iicl_exam_scores').select('exam_number,score').order('exam_number');
+ if(error)throw error;
+ EXAM_SCORES=data||[];
+}
+function examPage(){
+ const filled=EXAM_SCORES.filter(x=>x.score!==null).length,pc=Math.round(filled/6*100);
+ return `<main><div class="back" id="examBack">← Volver al panel</div><div class="eyebrow">Certificación IICL Presencial</div><h2>Exámenes de Certificación IICL Presencial</h2><p class="summary">Un participante · 6 exámenes · calificación de 0 a 100</p><div class="module-progress"><div class="module-progress-top"><strong>Avance de registro</strong><b>${pc}%</b></div><div class="track"><div class="fill" style="width:${pc}%"></div></div><p>${filled} de 6 notas registradas</p></div>${Array.from({length:6},(_,i)=>{const n=i+1,entry=EXAM_SCORES.find(x=>x.exam_number===n);return `<div class="participants-box"><div class="participants-head"><h3>Examen ${n}</h3><span>${entry?.score!=null?'Nota: '+entry.score+'/100':'Pendiente'}</span></div><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><label for="exam-${n}">Calificación (0–100)</label><input id="exam-${n}" type="number" min="0" max="100" step="1" value="${entry?.score??''}" style="width:110px;padding:10px;border:1px solid #ccc" placeholder="0–100"><button class="mini" data-exam-save="${n}">Guardar nota</button></div></div>`}).join('')}</main>`;
+}
+async function saveExamScore(n){
+ const el=document.getElementById('exam-'+n),raw=el.value.trim(),score=Number(raw);
+ if(raw===''||!Number.isInteger(score)||score<0||score>100)return alert('Ingresa una nota entera entre 0 y 100.');
+ const {error}=await db.from('iicl_exam_scores').upsert({exam_number:n,score},{onConflict:'exam_number'});
+ if(error)return alert('No se pudo guardar: '+error.message+'\nVerifica que hayas ejecutado el SQL de instalación.');
+ await loadExamScores();await loadHomeSummaries();render();alert('Nota del examen '+n+' guardada.');
+}
+
+function render(){document.getElementById('app').innerHTML=topbar(state.screen==='client'?'CLIENTE':'PANEL')+(state.screen==='home'?home():state.screen==='exams'?examPage():state.screen==='detail'?detail(false):detail(true));bind()}
+function home(){return `<main><div class="eyebrow">Apartados del reporteador</div><div class="section-switch">${sectionCard(IICL_ID,'📋 Certificación IICL','Preparación para certificación · 6 módulos')}${sectionCard(MANUAL_ID,'📗 Manual de Reparaciones','Reparación de contenedores de acero · 12 temas principales')}${sectionCard(EXAMS_ID,'📝 Exámenes de Certificación IICL Presencial','6 exámenes · 1 participante · notas de 0 a 100')}${sectionCard(VIRTUAL_ID,'💻 Certificación IICL Virtual','Los mismos 6 módulos de IICL · reportes independientes')}</div></main>`}
 
 function detail(client){let reps=[...state.reports].sort((a,b)=>a.day-b.day),doneSet=completedModules(),done=doneSet.size,pc=progressPct();return `<main><div class="back" id="back">← Volver</div><div class="top-actions">${client?'':`<button class="link-btn" id="clientView">👁 Vista cliente</button><button class="link-btn" id="copyClient">🔗 Copiar enlace cliente</button>`}<button class="link-btn" id="pdfAll">⬇ PDF acumulado</button></div><div class="detail-head"><h2>${esc(PROGRAM.name)}</h2><p class="sub">${esc(PROGRAM.client)}</p><div class="daycounter"><span class="big">Día ${maxDay()||0}</span><span class="of">Último día registrado</span></div></div>${participantsHTML(client)}<div class="module-progress"><div class="module-progress-top"><div><h3>${isManual()?'Avance del manual':'Avance del programa'}</h3><div class="summary">${done} de ${MODULES.length} ${isManual()?'temas':'módulos'} completados</div></div><div class="pct">${pc}%</div></div><div class="progress-row"><div class="track"><div class="fill" style="width:${pc}%"></div></div></div><div class="module-list">${MODULES.map((m,i)=>`<div class="module-item ${m.completed?'done':''}"><div class="module-name"><span class="module-dot"></span><span>${i+1}. ${esc(m.name)}</span></div><span class="module-state">${m.completed?'COMPLETADO':'PENDIENTE'}</span></div>`).join('')}</div></div><div class="eyebrow">Reportes por día</div>${reps.length?reps.map(r=>reportHTML(r,client)).join(''):'<div class="empty">Todavía no hay reportes.</div>'}</main>${client?'':`<button class="fab" id="newReport">＋ Crear reporte</button>`}`}
 function participantsHTML(client){return `<div class="participants-box"><div class="participants-head"><div><h3>Integrantes</h3><div class="summary">${state.participants.length} participante${state.participants.length===1?'':'s'} registrado${state.participants.length===1?'':'s'}</div></div>${client?'':`<button class="mini" id="addParticipant">＋ Agregar integrante</button>`}</div>${state.participants.length?state.participants.map(p=>`<div class="participant-row"><div class="participant-info"><b>${esc(p.full_name)}</b><span>DNI: ${esc(p.dni)}</span></div>${client?'':`<div class="participant-actions"><button class="mini editParticipant" data-id="${p.id}">Editar</button><button class="mini danger deleteParticipant" data-id="${p.id}">Eliminar</button></div>`}</div>`).join(''):`<div class="empty-small">Todavía no hay integrantes registrados.</div>`}</div>`}
@@ -124,6 +147,8 @@ function reportHTML(r,client){let photos=(r.activities||[]).reduce((n,a)=>n+(a.p
 function formatDate(v){if(!v)return '';const [y,m,d]=v.split('-');return `${d}/${m}/${y}`}
 
 function bind(){
+ document.getElementById('examBack')?.addEventListener('click',()=>{state.screen='home';render()});
+ document.querySelectorAll('[data-exam-save]').forEach(el=>el.addEventListener('click',()=>saveExamScore(Number(el.dataset.examSave))));
  document.querySelectorAll('[data-section]').forEach(el=>el.addEventListener('click',()=>goSection(el.dataset.section)));
  document.getElementById('openProgram')?.addEventListener('click',()=>{state.screen='detail';render()});
  document.getElementById('back')?.addEventListener('click',()=>{if(state.clientMode){return}state.screen=state.screen==='client'?'detail':'home';render()});
@@ -140,7 +165,7 @@ function bind(){
  document.querySelectorAll('.editDay').forEach(x=>x.onclick=e=>{e.stopPropagation();openReport(+x.dataset.day)});
  document.querySelectorAll('.pdfDay').forEach(x=>x.onclick=e=>{e.stopPropagation();pdfExport(+x.dataset.day)})
 }
-async function copyClientLink(){const u=new URL(location.href);u.search='';u.hash='';u.searchParams.set('section',isManual()?'manual':'iicl');u.searchParams.set('client',state.clientToken);await navigator.clipboard.writeText(u.toString());alert('Enlace del cliente copiado.')}
+async function copyClientLink(){const u=new URL(location.href);u.search='';u.hash='';u.searchParams.set('section',sectionSlug(PROGRAM_ID));u.searchParams.set('client',state.clientToken);await navigator.clipboard.writeText(u.toString());alert('Enlace del cliente copiado.')}
 
 function openReport(day=null){let existing=state.reports.find(r=>r.day===day);editors=(existing?JSON.parse(JSON.stringify(existing.activities)):[{id:crypto.randomUUID(),text:'',photos:[],moduleId:'',module:'',moduleCompleted:false,activityDate:new Date().toISOString().slice(0,10),attendance:{}}]);editors.forEach(a=>{a.activityDate=a.activityDate||new Date().toISOString().slice(0,10);a.attendance=a.attendance||{}});const usedDays=new Set(state.reports.map(r=>Number(r.day)));let selectedDay=day||maxDay()+1;while(!existing&&usedDays.has(selectedDay))selectedDay++;let upper=Math.max(selectedDay,maxDay()+10,30);let availableDays=Array.from({length:upper},(_,i)=>i+1).filter(d=>!usedDays.has(d)||d===day);if(!availableDays.includes(selectedDay))availableDays.push(selectedDay);availableDays.sort((a,b)=>a-b);let options=availableDays.map(d=>`<option value="${d}" ${d===selectedDay?'selected':''}>Día ${d}${usedDays.has(d)&&d===day?' (actual)':''}</option>`).join('');document.body.insertAdjacentHTML('beforeend',`<div class="overlay" id="overlay"><div class="modal"><div class="modal-head"><h2>${existing?'Editar':'Crear'} reporte</h2><button class="close" id="closeModal">×</button></div><p class="modal-sub">Registra la fecha, actividad, evidencias y asistencia de los integrantes.</p><div class="field"><label class="fl">Día</label><select id="daySelect">${options}</select></div><div id="editors"></div><button class="add-act" id="addAct">＋ Agregar otra actividad</button></div><div class="modal-footer"><button class="primary" id="saveReport">Guardar reporte</button></div></div>`);drawEditors();document.getElementById('closeModal').onclick=closeModal;document.getElementById('addAct').onclick=()=>{editors.push({id:crypto.randomUUID(),text:'',photos:[],moduleId:'',module:'',moduleCompleted:false,activityDate:new Date().toISOString().slice(0,10),attendance:{}});drawEditors()};document.getElementById('saveReport').onclick=()=>saveReport(day)}
 function drawEditors(){let c=document.getElementById('editors');c.innerHTML=editors.map((a,i)=>`<div class="activity-editor"><div class="editor-head"><strong>Actividad ${i+1}</strong>${editors.length>1?`<button class="remove-act" data-i="${i}">Eliminar</button>`:''}</div><div class="field"><label class="fl">Fecha de la actividad</label><input type="date" class="activityDateInput" data-i="${i}" value="${esc(a.activityDate||'')}"></div><div class="field"><label class="fl">${isManual()?'Tema del Manual de Reparaciones':'Módulo del programa'}</label><select class="moduleSelect" data-i="${i}"><option value="">${isManual()?'Seleccionar tema...':'Seleccionar módulo...'}</option>${MODULES.map(m=>`<option value="${m.id}" ${a.moduleId===m.id?'selected':''}>${esc(m.name)}</option>`).join('')}</select><label class="check-row"><input type="checkbox" class="moduleDone" data-i="${i}" ${a.moduleCompleted?'checked':''}> ${isManual()?'Marcar este tema como completado con esta actividad':'Marcar este módulo como completado con esta actividad'}</label></div><div class="field"><label class="fl">Descripción del trabajo realizado</label><textarea class="actText" data-i="${i}" placeholder="Describe lo realizado...">${esc(a.text)}</textarea></div><div class="attendance-box"><h4>Asistencia de integrantes</h4>${state.participants.length?state.participants.map(p=>`<div class="attendance-row"><div class="attendance-name"><b>${esc(p.full_name)}</b><span>DNI ${esc(p.dni)}</span></div><label class="attendance-check"><input type="checkbox" class="attCheck" data-i="${i}" data-pid="${p.id}" ${a.attendance?.[p.id]?'checked':''}> Asistió</label></div>`).join(''):`<div class="empty-small">Primero registra integrantes en el proyecto.</div>`}</div><div class="source-actions"><button class="source-btn camBtn" data-i="${i}">📷 Tomar foto</button><button class="source-btn fileBtn" data-i="${i}">⬆ Subir foto / archivo</button></div><input type="file" accept="image/*" capture="environment" class="hidden-input camInput" data-i="${i}"><input type="file" accept="image/*" multiple class="hidden-input fileInput" data-i="${i}"><div class="thumbs">${a.photos.map((p,j)=>`<div class="thumb"><img src="${esc(typeof p==='string'?p:p.preview)}"><button class="rmPhoto" data-i="${i}" data-j="${j}">×</button></div>`).join('')}</div></div>`).join('');c.querySelectorAll('.actText').forEach(t=>t.oninput=()=>editors[+t.dataset.i].text=t.value);c.querySelectorAll('.activityDateInput').forEach(x=>x.onchange=()=>editors[+x.dataset.i].activityDate=x.value);c.querySelectorAll('.attCheck').forEach(x=>x.onchange=()=>{let a=editors[+x.dataset.i];a.attendance=a.attendance||{};a.attendance[x.dataset.pid]=x.checked});c.querySelectorAll('.moduleSelect').forEach(x=>x.onchange=()=>{let i=+x.dataset.i;editors[i].moduleId=x.value;editors[i].module=MODULES.find(m=>m.id===x.value)?.name||'';if(!x.value)editors[i].moduleCompleted=false;drawEditors()});c.querySelectorAll('.moduleDone').forEach(x=>x.onchange=()=>editors[+x.dataset.i].moduleCompleted=!!x.checked);c.querySelectorAll('.remove-act').forEach(b=>b.onclick=()=>{editors.splice(+b.dataset.i,1);drawEditors()});c.querySelectorAll('.camBtn').forEach(b=>b.onclick=()=>c.querySelector(`.camInput[data-i="${b.dataset.i}"]`).click());c.querySelectorAll('.fileBtn').forEach(b=>b.onclick=()=>c.querySelector(`.fileInput[data-i="${b.dataset.i}"]`).click());c.querySelectorAll('input[type=file]').forEach(inp=>inp.onchange=async()=>{let i=+inp.dataset.i;for(let f of inp.files){if(!f.type.startsWith('image/'))continue;editors[i].photos.push({file:f,preview:URL.createObjectURL(f)})}drawEditors()});c.querySelectorAll('.rmPhoto').forEach(b=>b.onclick=()=>{editors[+b.dataset.i].photos.splice(+b.dataset.j,1);drawEditors()})}
