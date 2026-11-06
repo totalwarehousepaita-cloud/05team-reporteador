@@ -39,6 +39,7 @@ const IICL_ID='iicl';
 const MANUAL_ID='manual-reparaciones';
 const VIRTUAL_ID='iicl-virtual';
 const EXAMS_ID='iicl-examenes-presencial';
+const VIRTUAL_EXAMS_ID='iicl-examenes-virtual';
 let EXAM_SCORES=[];
 let EXAM_PARTICIPANT_NAME='';
 /* GENERAL_CLIENT_VIEW_PATCH */
@@ -56,7 +57,7 @@ function clientGeneralUrl(tokens){
 function generalHome(){state.screen='home';state.clientMode=true;render()}
 async function copyGeneralClientLink(){
   try {
-    const ids=[IICL_ID,MANUAL_ID,EXAMS_ID,VIRTUAL_ID];
+    const ids=[IICL_ID,MANUAL_ID,EXAMS_ID,VIRTUAL_ID,VIRTUAL_EXAMS_ID];
     const {data,error}=await db.from('programs').select('id,client_token').in('id',ids);
     if(error)throw error;
     const tokens=Object.fromEntries((data||[]).map(x=>[x.id,x.client_token]));
@@ -67,18 +68,21 @@ async function copyGeneralClientLink(){
   }catch(e){console.error(e);alert('No se pudo generar el enlace general: '+e.message)}
 }
 
-let PROGRAM_ID=({'manual':MANUAL_ID,'virtual':VIRTUAL_ID,'examenes':EXAMS_ID}[new URLSearchParams(location.search).get('section')]||IICL_ID);
+let PROGRAM_ID=({'manual':MANUAL_ID,'virtual':VIRTUAL_ID,'examenes':EXAMS_ID,'examenes-virtual':VIRTUAL_EXAMS_ID}[new URLSearchParams(location.search).get('section')]||IICL_ID);
 const MANUAL_TITLES=['Introducción y finalidades','Procedimientos generales de reparación','Esquineros (Corner Fittings)','Postes esquineros (Corner Posts)','Rieles','Paneles laterales y frontales','Ensamblaje de techo','Subestructura (o submarco)','Piso','Ensamblaje de puertas','Ventiladores','Glosario de términos de reparación'];
+function isExamProgram(id=PROGRAM_ID){return id===EXAMS_ID||id===VIRTUAL_EXAMS_ID}
+function examScoreTable(){return PROGRAM_ID===VIRTUAL_EXAMS_ID?'iicl_virtual_exam_scores':'iicl_exam_scores'}
+function examParticipantTable(){return PROGRAM_ID===VIRTUAL_EXAMS_ID?'iicl_virtual_exam_participant':'iicl_exam_participant'}
 function isManual(){return PROGRAM_ID===MANUAL_ID}
-function sectionSlug(id){return ({[IICL_ID]:'iicl',[MANUAL_ID]:'manual',[VIRTUAL_ID]:'virtual',[EXAMS_ID]:'examenes'})[id]||'iicl'}
+function sectionSlug(id){return ({[IICL_ID]:'iicl',[MANUAL_ID]:'manual',[VIRTUAL_ID]:'virtual',[EXAMS_ID]:'examenes',[VIRTUAL_EXAMS_ID]:'examenes-virtual'})[id]||'iicl'}
 async function goSection(id){
-  if(![IICL_ID,MANUAL_ID,VIRTUAL_ID,EXAMS_ID].includes(id))return;
+  if(![IICL_ID,MANUAL_ID,VIRTUAL_ID,EXAMS_ID,VIRTUAL_EXAMS_ID].includes(id))return;
   PROGRAM_ID=id;
   const u=new URL(location.href);
   if(!generalClient())u.search='';
   u.searchParams.set('section',sectionSlug(id));
   history.pushState({section:id},'',u.toString());
-  state.screen=id===EXAMS_ID?'exams':generalClient()?'client':'detail';state.clientMode=generalClient();state.clientToken=null;
+  state.screen=isExamProgram(id)?'exams':generalClient()?'client':'detail';state.clientMode=generalClient();state.clientToken=null;
   document.getElementById('app').innerHTML=topbar('PANEL')+'<div class="empty">Cargando reportes...</div>';
   await boot();
 }
@@ -86,7 +90,7 @@ async function goSection(id){
 const db=window.supabase.createClient(SUPABASE_URL,SUPABASE_KEY);
 let PROGRAM={id:PROGRAM_ID,name:'Preparación para Certificación IICL — Inspector Dry Van',client:'05TEAM · Seguimiento de actividades de Elvis Sernauque Gómez',scope:[]};
 let MODULES=[];
-let OTHER_SUMMARY={iicl:null,manual:null,[VIRTUAL_ID]:null,[EXAMS_ID]:null};
+let OTHER_SUMMARY={iicl:null,manual:null,[VIRTUAL_ID]:null,[EXAMS_ID]:null,[VIRTUAL_EXAMS_ID]:null};
 let state={screen:'home',reports:[],participants:[],clientMode:false,clientToken:null};
 let editors=[];
 
@@ -101,15 +105,15 @@ async function boot(){
     const params=new URLSearchParams(location.search);
     const general=generalTokens();
     const token=general?general[PROGRAM_ID]:params.get('client');
-    if(general && (!token || ![IICL_ID,MANUAL_ID,EXAMS_ID,VIRTUAL_ID].includes(PROGRAM_ID))){
+    if(general && (!token || ![IICL_ID,MANUAL_ID,EXAMS_ID,VIRTUAL_ID,VIRTUAL_EXAMS_ID].includes(PROGRAM_ID))){
       document.getElementById('app').innerHTML='<div class="empty">Enlace general de cliente no válido.</div>';return;
     }
     let q=db.from('programs').select('id,name,trainer,client_token').eq('id',PROGRAM_ID).single();
     const {data:p,error:pe}=await q;if(pe)throw pe;
     if(token && token!==p.client_token){document.getElementById('app').innerHTML='<div class="empty" style="padding-top:80px">Enlace de cliente no válido.</div>';return}
     PROGRAM.name=p.name; PROGRAM.client=`05TEAM · Seguimiento de actividades de ${p.trainer}`; state.clientToken=p.client_token;
-    if(token){state.clientMode=true;state.screen=PROGRAM_ID===EXAMS_ID?'exams':general?(params.has('section')?'client':'home'):'client'}
-    if(PROGRAM_ID===EXAMS_ID){await loadExamScores()}else{await reloadData()} await loadHomeSummaries(); render();
+    if(token){state.clientMode=true;state.screen=isExamProgram()?'exams':general?(params.has('section')?'client':'home'):'client'}
+    if(isExamProgram()){await loadExamScores()}else{await reloadData()} await loadHomeSummaries(); render();
   }catch(e){console.error(e);document.getElementById('app').innerHTML='<div class="empty" style="padding-top:80px">⚠ No se pudo conectar con Supabase. Revisa la configuración y vuelve a cargar la página.</div>'}
 }
 
@@ -142,43 +146,49 @@ async function loadHomeSummaries(){
     }catch(e){console.warn('No se pudo cargar resumen',id,e);return [id,null]}
   }));
   OTHER_SUMMARY=Object.fromEntries(results);
-  try{await loadExamScores();OTHER_SUMMARY[EXAMS_ID]={done:EXAM_SCORES.filter(x=>x.score!==null).length,total:6,pc:Math.round(EXAM_SCORES.filter(x=>x.score!==null).length/6*100),day:0}}catch(e){console.warn('Notas no disponibles',e);OTHER_SUMMARY[EXAMS_ID]=null}
+  try{const {data:presScores,error:presError}=await db.from('iicl_exam_scores').select('exam_number,score');if(presError)throw presError;const presDone=(presScores||[]).filter(x=>x.score!==null).length;OTHER_SUMMARY[EXAMS_ID]={done:presDone,total:6,pc:Math.round(presDone/6*100),day:0}}catch(e){console.warn('Notas no disponibles',e);OTHER_SUMMARY[EXAMS_ID]=null}
+  try{
+    const {data,error}=await db.from('iicl_virtual_exam_scores').select('exam_number,score');
+    if(error)throw error;
+    const done=(data||[]).filter(x=>x.score!==null).length;
+    OTHER_SUMMARY[VIRTUAL_EXAMS_ID]={done,total:6,pc:Math.round(done/6*100),day:0};
+  }catch(e){console.warn('Exámenes virtuales no disponibles',e);OTHER_SUMMARY[VIRTUAL_EXAMS_ID]=null}
 }
 function sectionCard(id,title,subtitle){
  const info=OTHER_SUMMARY[id],pc=info?.pc??0;
- const count=info?`${info.done} de ${info.total} ${id===EXAMS_ID?'exámenes registrados':id===MANUAL_ID?'temas completados':'módulos completados'}`:'Datos pendientes de configuración';
- return `<button type="button" class="section-project" data-section="${id}"><h3>${title}</h3><p>${subtitle}</p><div class="progress-row"><div class="track"><div class="fill" style="width:${pc}%"></div></div><div class="pct">${pc}%</div></div><div class="meta"><span>${id===EXAMS_ID?'Registro de notas':'Día '+(info?.day??0)}</span><span>${count}</span></div><div class="card-action">Abrir apartado →</div></button>`;
+ const count=info?`${info.done} de ${info.total} ${isExamProgram(id)?'exámenes registrados':id===MANUAL_ID?'temas completados':'módulos completados'}`:'Datos pendientes de configuración';
+ return `<button type="button" class="section-project" data-section="${id}"><h3>${title}</h3><p>${subtitle}</p><div class="progress-row"><div class="track"><div class="fill" style="width:${pc}%"></div></div><div class="pct">${pc}%</div></div><div class="meta"><span>${isExamProgram(id)?'Registro de notas':'Día '+(info?.day??0)}</span><span>${count}</span></div><div class="card-action">Abrir apartado →</div></button>`;
 }
 
 async function loadExamScores(){
- const {data,error}=await db.from('iicl_exam_scores').select('exam_number,score').order('exam_number');
+ const {data,error}=await db.from(examScoreTable()).select('exam_number,score').order('exam_number');
  if(error)throw error;
  EXAM_SCORES=data||[];
- const {data:participant,error:participantError}=await db.from('iicl_exam_participant').select('full_name').eq('id',1).maybeSingle();
+ const {data:participant,error:participantError}=await db.from(examParticipantTable()).select('full_name').eq('id',1).maybeSingle();
  if(participantError)throw participantError;
  EXAM_PARTICIPANT_NAME=participant?.full_name||'';
 }
 function examPage(){
  const filled=EXAM_SCORES.filter(x=>x.score!==null).length,pc=Math.round(filled/6*100);
- return `<main>${state.clientMode&&!generalClient()?'':'<div class="back" id="examBack">← Volver al panel</div>'}${!state.clientMode?'<div class="top-actions"><button class="link-btn" id="copyExamClient">🔗 Copiar enlace de exámenes</button></div>':''}<div class="eyebrow">Certificación IICL Presencial</div><h2>Exámenes de Certificación IICL Presencial</h2><p class="summary">Un participante · 6 exámenes · calificación de 0 a 100</p><div class="participants-box"><h3>Nombre del participante</h3><div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><input id="examParticipantName" type="text" maxlength="120" value="${esc(EXAM_PARTICIPANT_NAME)}" placeholder="Escribe el nombre completo" style="flex:1;min-width:200px;padding:10px;border:1px solid #ccc"><button type="button" class="mini" id="saveExamParticipant">Guardar nombre</button></div><p class="summary">Puedes editar el nombre sin cambiar las notas guardadas.</p></div><div class="module-progress"><div class="module-progress-top"><strong>Avance de registro</strong><b>${pc}%</b></div><div class="track"><div class="fill" style="width:${pc}%"></div></div><p>${filled} de 6 notas registradas</p></div>${Array.from({length:6},(_,i)=>{const n=i+1,entry=EXAM_SCORES.find(x=>x.exam_number===n);return `<div class="participants-box"><div class="participants-head"><h3>Examen ${n}</h3><span>${entry?.score!=null?'Nota: '+entry.score+'/100':'Pendiente'}</span></div><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><label for="exam-${n}">Calificación (0–100)</label><input id="exam-${n}" type="number" min="0" max="100" step="1" value="${entry?.score??''}" style="width:110px;padding:10px;border:1px solid #ccc" placeholder="0–100"><button class="mini" data-exam-save="${n}">Guardar nota</button></div></div>`}).join('')}</main>`;
+ return `<main>${state.clientMode&&!generalClient()?'':'<div class="back" id="examBack">← Volver al panel</div>'}${!state.clientMode?'<div class="top-actions"><button class="link-btn" id="copyExamClient">🔗 Copiar enlace de exámenes ${PROGRAM_ID===VIRTUAL_EXAMS_ID?'virtuales':'presenciales'}</button></div>':''}<div class="eyebrow">Certificación IICL ${PROGRAM_ID===VIRTUAL_EXAMS_ID?'Virtual':'Presencial'}</div><h2>Exámenes de Certificación IICL ${PROGRAM_ID===VIRTUAL_EXAMS_ID?'Virtual':'Presencial'}</h2><p class="summary">Un participante · 6 exámenes · calificación de 0 a 100</p><div class="participants-box"><h3>Nombre del participante</h3><div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap"><input id="examParticipantName" type="text" maxlength="120" value="${esc(EXAM_PARTICIPANT_NAME)}" placeholder="Escribe el nombre completo" style="flex:1;min-width:200px;padding:10px;border:1px solid #ccc"><button type="button" class="mini" id="saveExamParticipant">Guardar nombre</button></div><p class="summary">Puedes editar el nombre sin cambiar las notas guardadas.</p></div><div class="module-progress"><div class="module-progress-top"><strong>Avance de registro</strong><b>${pc}%</b></div><div class="track"><div class="fill" style="width:${pc}%"></div></div><p>${filled} de 6 notas registradas</p></div>${Array.from({length:6},(_,i)=>{const n=i+1,entry=EXAM_SCORES.find(x=>x.exam_number===n);return `<div class="participants-box"><div class="participants-head"><h3>Examen ${n}</h3><span>${entry?.score!=null?'Nota: '+entry.score+'/100':'Pendiente'}</span></div><div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap"><label for="exam-${n}">Calificación (0–100)</label><input id="exam-${n}" type="number" min="0" max="100" step="1" value="${entry?.score??''}" style="width:110px;padding:10px;border:1px solid #ccc" placeholder="0–100"><button class="mini" data-exam-save="${n}">Guardar nota</button></div></div>`}).join('')}</main>`;
 }
 async function saveExamParticipant(){
  const name=document.getElementById('examParticipantName')?.value.trim();
  if(!name)return alert('Ingresa el nombre del participante.');
- const {error}=await db.from('iicl_exam_participant').upsert({id:1,full_name:name,updated_at:new Date().toISOString()},{onConflict:'id'});
+ const {error}=await db.from(examParticipantTable()).upsert({id:1,full_name:name,updated_at:new Date().toISOString()},{onConflict:'id'});
  if(error)return alert('No se pudo guardar el nombre: '+error.message);
  EXAM_PARTICIPANT_NAME=name;render();alert('Nombre del participante guardado.');
 }
 async function saveExamScore(n){
  const el=document.getElementById('exam-'+n),raw=el.value.trim(),score=Number(raw);
  if(raw===''||!Number.isInteger(score)||score<0||score>100)return alert('Ingresa una nota entera entre 0 y 100.');
- const {error}=await db.from('iicl_exam_scores').upsert({exam_number:n,score},{onConflict:'exam_number'});
+ const {error}=await db.from(examScoreTable()).upsert({exam_number:n,score},{onConflict:'exam_number'});
  if(error)return alert('No se pudo guardar: '+error.message+'\nVerifica que hayas ejecutado el SQL de instalación.');
  await loadExamScores();await loadHomeSummaries();render();alert('Nota del examen '+n+' guardada.');
 }
 
 function render(){document.getElementById('app').innerHTML=topbar(state.clientMode?'CLIENTE':'PANEL')+(state.screen==='home'?home():state.screen==='exams'?examPage():state.screen==='detail'?detail(false):detail(true));bind();if(state.clientMode&&state.screen==='exams'){document.querySelectorAll('#saveExamParticipant,[data-exam-save]').forEach(el=>el.remove());document.querySelectorAll('#examParticipantName,[id^="exam-"]').forEach(el=>{el.readOnly=true;el.disabled=true})}}
-function home(){return `<main>${!state.clientMode?'<div class="top-actions"><button class="link-btn" id="copyGeneralClient">🔗 Copiar enlace general del cliente</button></div>':''}<div class="eyebrow">${state.clientMode?'Panel general del cliente':'Apartados del reporteador'}</div><div class="section-switch">${sectionCard(IICL_ID,'📋 Certificación IICL','Preparación para certificación · 6 módulos')}${sectionCard(MANUAL_ID,'📗 Manual de Reparaciones','Reparación de contenedores de acero · 12 temas principales')}${sectionCard(EXAMS_ID,'📝 Exámenes de Certificación IICL Presencial','6 exámenes · 1 participante')}${sectionCard(VIRTUAL_ID,'💻 Certificación IICL Virtual','Los mismos 6 módulos de IICL · reportes independientes')}</div></main>`}
+function home(){return `<main>${!state.clientMode?'<div class="top-actions"><button class="link-btn" id="copyGeneralClient">🔗 Copiar enlace general del cliente</button></div>':''}<div class="eyebrow">${state.clientMode?'Panel general del cliente':'Apartados del reporteador'}</div><div class="section-switch">${sectionCard(IICL_ID,'📋 Certificación IICL','Preparación para certificación · 6 módulos')}${sectionCard(MANUAL_ID,'📗 Manual de Reparaciones','Reparación de contenedores de acero · 12 temas principales')}${sectionCard(EXAMS_ID,'📝 Exámenes de Certificación IICL Presencial','6 exámenes · 1 participante')}${sectionCard(VIRTUAL_ID,'💻 Certificación IICL Virtual','Los mismos 6 módulos de IICL · reportes independientes')}${sectionCard(VIRTUAL_EXAMS_ID,'🖥️ Exámenes de Certificación IICL Virtual','6 exámenes · 1 participante')}</div></main>`}
 
 function detail(client){let reps=[...state.reports].sort((a,b)=>a.day-b.day),doneSet=completedModules(),done=doneSet.size,pc=progressPct();return `<main><div class="back" id="back">← Volver</div><div class="top-actions">${client?'':`<button class="link-btn" id="clientView">👁 Vista cliente</button><button class="link-btn" id="copyClient">🔗 Copiar enlace cliente</button>`}<button class="link-btn" id="pdfAll">⬇ PDF acumulado</button></div><div class="detail-head"><h2>${esc(PROGRAM.name)}</h2><p class="sub">${esc(PROGRAM.client)}</p><div class="daycounter"><span class="big">Día ${maxDay()||0}</span><span class="of">Último día registrado</span></div></div>${participantsHTML(client)}<div class="module-progress"><div class="module-progress-top"><div><h3>${isManual()?'Avance del manual':'Avance del programa'}</h3><div class="summary">${done} de ${MODULES.length} ${isManual()?'temas':'módulos'} completados</div></div><div class="pct">${pc}%</div></div><div class="progress-row"><div class="track"><div class="fill" style="width:${pc}%"></div></div></div><div class="module-list">${MODULES.map((m,i)=>`<div class="module-item ${m.completed?'done':''}"><div class="module-name"><span class="module-dot"></span><span>${i+1}. ${esc(m.name)}</span></div><span class="module-state">${m.completed?'COMPLETADO':'PENDIENTE'}</span></div>`).join('')}</div></div><div class="eyebrow">Reportes por día</div>${reps.length?reps.map(r=>reportHTML(r,client)).join(''):'<div class="empty">Todavía no hay reportes.</div>'}</main>${client?'':`<button class="fab" id="newReport">＋ Crear reporte</button>`}`}
 function participantsHTML(client){return `<div class="participants-box"><div class="participants-head"><div><h3>Integrantes</h3><div class="summary">${state.participants.length} participante${state.participants.length===1?'':'s'} registrado${state.participants.length===1?'':'s'}</div></div>${client?'':`<button class="mini" id="addParticipant">＋ Agregar integrante</button>`}</div>${state.participants.length?state.participants.map(p=>`<div class="participant-row"><div class="participant-info"><b>${esc(p.full_name)}</b><span>DNI: ${esc(p.dni)}</span></div>${client?'':`<div class="participant-actions"><button class="mini editParticipant" data-id="${p.id}">Editar</button><button class="mini danger deleteParticipant" data-id="${p.id}">Eliminar</button></div>`}</div>`).join(''):`<div class="empty-small">Todavía no hay integrantes registrados.</div>`}</div>`}
@@ -213,11 +223,11 @@ function bind(){
 /* EXAM_LINK_PATCH_2026 */
 async function copyExamClientLink(){
  try{
-  const {data,error}=await db.from('programs').select('client_token').eq('id',EXAMS_ID).single();
+  const {data,error}=await db.from('programs').select('client_token').eq('id',PROGRAM_ID).single();
   if(error)throw error;
   if(!data?.client_token)throw Error('No hay token de cliente configurado para exámenes.');
   const u=new URL(location.href);u.search='';u.hash='';
-  u.searchParams.set('section','examenes');u.searchParams.set('client',data.client_token);
+  u.searchParams.set('section',sectionSlug(PROGRAM_ID));u.searchParams.set('client',data.client_token);
   try{await navigator.clipboard.writeText(u.toString());alert('Enlace de exámenes copiado.')}
   catch(e){prompt('Copia el enlace de exámenes:',u.toString())}
  }catch(e){console.error(e);alert('No se pudo copiar el enlace de exámenes: '+e.message)}
